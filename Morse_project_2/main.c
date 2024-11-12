@@ -42,13 +42,14 @@ Char mpuStack[2 * STACKSIZE];
 
 enum state
 {
-    IDLE = 0, SEND, RECEIVE
+    IDLE = 0, SEND, RECEIVE, MPU
 };
 enum state programState = IDLE;
 
 //test global variables
 static uint8_t button = 0;
-char test[20];
+Char buff[200];
+
 
 // RTOS global variables for handling the pins
 static PIN_Handle buttonHandle;
@@ -87,6 +88,7 @@ static const I2CCC26XX_I2CPinCfg i2cMPUCfg = {
 
 void buttonFxn(PIN_Handle handle, PIN_Id pinId);
 void buzzfxn(UArg arg0, UArg arg1);
+static void uartFxn(UART_Handle handle, void *rxBuf, size_t len);
 void uartSend(UArg arg0, UArg arg1);
 void sensorFxn(UArg arg0, UArg arg1);
 /*
@@ -184,80 +186,24 @@ void buttonFxn(PIN_Handle handle, PIN_Id pinId)
 
     button++;
     //sprintf(test, "uart read check\r\n", strlen("uart read check\r\n"));
-    if (programState == IDLE)
+    if (button == 1)
     {
         programState = SEND;
-    }
-    else if (programState == SEND)
+    } else if (button == 2)
     {
-        programState = IDLE;
+        programState = RECEIVE;
+    }
+    else if (button == 3)
+    {
+        programState = MPU;
+    }
+    else if (button >= 4)
+    {
+        button = 0;
     }
     System_printf("button test %d \r\n", button);
     System_printf("program state: %d \r\n", programState);
     System_flush();
-}
-
-void buzzfxn(UArg arg0, UArg arg1)
-{
-
-    System_printf("buzz on \r\n");
-    System_flush();
-    while (0)
-    {
-        if (programState != IDLE)
-        {
-            System_printf("beep \r\n");
-            System_flush();
-            buzzerOpen(hBuzzer);
-            buzzerSetFrequency(1000);
-            Task_sleep(50000 / Clock_tickPeriod);
-            buzzerClose();
-            Task_sleep(950000 / Clock_tickPeriod);
-        }
-    }
-}
-
-void uartSend(UArg arg0, UArg arg1)
-{
-
-    //Char buff[2000];
-    Char letter[5];
-    // UART library settings
-    UART_Handle uart;
-    UART_Params uartParams;
-
-    // Initialize serial communication
-    UART_Params_init(&uartParams);
-    uartParams.writeDataMode = UART_DATA_TEXT;
-    uartParams.readDataMode = UART_DATA_TEXT;
-    uartParams.readEcho = UART_ECHO_OFF;
-    uartParams.readMode = UART_MODE_BLOCKING;
-    uartParams.baudRate = 9600; // nopeus 9600baud
-    uartParams.dataLength = UART_LEN_8; // 8
-    uartParams.parityType = UART_PAR_NONE; // n
-    uartParams.stopBits = UART_STOP_ONE; // 1
-
-    // Open connection to device's serial port defined by Board_UART0
-    uart = UART_open(Board_UART0, &uartParams);
-    if (uart == NULL)
-    {
-        System_abort("Error opening the UART");
-    }
-
-    UART_write(uart, "uart check\r\n", strlen("uart check\r\n"));
-
-    // Infinite loop
-    while (1)
-    {
-
-        // Let's send the current state
-        //sprintf(buff, "button pressed %1d times\n\r", button);
-        UART_read(uart, letter, 5);
-        UART_write(uart, letter, 5);
-
-        // Let's sleep for one second
-        Task_sleep(1000000 / Clock_tickPeriod);
-    }
 }
 
 Void sensorFxn(UArg arg0, UArg arg1) {
@@ -296,29 +242,115 @@ Void sensorFxn(UArg arg0, UArg arg1) {
     System_printf("\nx, y, z \n");
     System_flush();
 
-    // Loop forever
-    while (0) {
 
+    // Loop forever
+    while (1)
+        {
+        if(programState == MPU)
+        {
         // MPU ask data
         mpu9250_get_data(&i2cMPU, &ax, &ay, &az, &gx, &gy, &gz);
 
-        if(abs(ax) >=0.05 || abs(ay)>=0.05) {
+        if(abs(ax) >=0.05 || abs(ay)>=0.05)
+            {
             char xstr[20], ystr[20], zstr[20];
             sprintf(xstr, "%.2f", ax);
             sprintf(ystr, "%.2f", ay);
             sprintf(zstr, "%.2f", az);
 
-            //System_printf("%s, %s, %s\n", xstr, ystr, zstr);
-            //System_flush();
+            System_printf("%s, %s, %s\n", xstr, ystr, zstr);
+            System_flush();
 
-        }
+            }
         // Sleep 100ms
+        }
         Task_sleep(100000 / Clock_tickPeriod);
-    }
-
+        }
     // Program never gets here..
     // MPU close i2c
     // I2C_close(i2cMPU);
     // MPU power off
     // PIN_setOutputValue(hMpuPin,Board_MPU_POWER, Board_MPU_POWER_OFF);
 }
+
+void buzzfxn(UArg arg0, UArg arg1)
+{
+
+    System_printf("buzz on \r\n");
+    System_flush();
+
+    while (1)
+    {
+        if (programState == SEND)
+        {
+            System_printf("beep \r\n");
+            System_flush();
+            buzzerOpen(hBuzzer);
+            buzzerSetFrequency(5000);
+            Task_sleep(50000 / Clock_tickPeriod);
+            buzzerClose();
+        }
+        Task_sleep(950000 / Clock_tickPeriod);
+    }
+    System_printf("buzz skipped \r\n");
+    System_flush();
+}
+
+// Handler function
+static void uartFxn(UART_Handle handle, void *rxBuf, size_t len) {
+
+   // We now have the desired amount of characters available
+   // in the rxBuf array, with a length of len, which we can process as needed.
+   // Here, we pass them as arguments to another function (for demonstration purposes).
+
+   // After processing, wait for the next interrupt...
+   UART_read(handle, rxBuf, 1);
+}
+void uartSend(UArg arg0, UArg arg1)
+{
+
+    // UART library settings
+    UART_Handle uart;
+    UART_Params uartParams;
+
+    // Initialize serial communication
+    UART_Params_init(&uartParams);
+    uartParams.readMode = UART_MODE_CALLBACK; // Interrupt-based reception
+    uartParams.readCallback = &uartFxn; // Handler function
+    uartParams.readDataMode = UART_DATA_TEXT;
+    uartParams.writeDataMode = UART_DATA_TEXT;
+    uartParams.baudRate = 9600; // nopeus 9600baud
+    uartParams.dataLength = UART_LEN_8; // 8
+    uartParams.parityType = UART_PAR_NONE; // n
+    uartParams.stopBits = UART_STOP_ONE; // 1
+
+    // Open connection to device's serial port defined by Board_UART0
+    uart = UART_open(Board_UART0, &uartParams);
+    if (uart == NULL)
+    {
+        System_abort("Error opening the UART");
+    }
+
+    UART_write(uart, "uart check\r\n", strlen("uart check\r\n"));
+
+    // Start waiting for data
+
+    UART_read(uart, buff, 1);
+    //UART_write(uart, buff, 1);
+
+    // Infinite loop
+        while(1)
+        {
+            if(programState == RECEIVE)
+            {
+            System_printf("uart loop \n\r");
+            System_flush();
+            }
+            Task_sleep(950000 / Clock_tickPeriod);
+        }
+     System_printf("uart done \n\r");
+     System_flush();
+}
+
+// TODO different buffers for sending and receiving
+// strcmp from String lib
