@@ -47,8 +47,13 @@ enum state
 enum state programState = IDLE;
 
 //test global variables
+#define BUFF_SIZE 200
+#define TIMEOUT 10000
+volatile uint32_t lastCalled = 0;
 static uint8_t button = 0;
-Char buff[200];
+Char buff[BUFF_SIZE];
+Bool has_message = false;
+static int rxIndex = 0;
 
 
 // RTOS global variables for handling the pins
@@ -91,11 +96,16 @@ void buzzfxn(UArg arg0, UArg arg1);
 static void uartFxn(UART_Handle handle, void *rxBuf, size_t len);
 void uartSend(UArg arg0, UArg arg1);
 void sensorFxn(UArg arg0, UArg arg1);
+Void clkFxn(UArg arg0);
 /*
  *  ======== main ========
  */
 int main(void)
 {
+    //creating clcok paramters
+    Clock_Handle clk;
+    Clock_Params clkParams;
+
     /* Creating task parameters uart*/
     Task_Params uartParams;
     Task_Handle uartHandle;
@@ -108,6 +118,22 @@ int main(void)
 
     /* Call board init functions */
     Board_initGeneral();
+
+    /* setup Clock params */
+      Clock_Params_init(&clkParams);
+
+
+
+      /* Create a periodic Clock Instance with period = 5 system time units */
+      clkParams.period = 5;
+      clkParams.startFlag = TRUE;
+
+      clk = Clock_create(clkFxn, 5, &clkParams, NULL);
+      Clock_start(clk);
+      System_printf("Use Some Time...\n");  /* add */
+      System_flush();  /* add */
+
+      lastCalled = Clock_getTicks();  /* add */
 
     // Enable the pins for use in the program
     buttonHandle = PIN_open(&buttonState, buttonConfig);
@@ -181,18 +207,34 @@ int main(void)
     return (0);
 }
 
+Void clkFxn(UArg arg0)
+{
+
+        if(has_message && Clock_getTicks() - lastCalled > TIMEOUT && programState == IDLE )
+                {
+                    programState = RECEIVE;
+                    rxIndex = 0;
+                    has_message = false;
+                    System_printf("%s", buff);
+                    System_flush();
+                    //System_printf("%d\n", Clock_getTicks() - lastCalled);
+                    //System_flush();
+                    memset(buff, '\0', BUFF_SIZE);
+                }
+}
+
+
+
 void buttonFxn(PIN_Handle handle, PIN_Id pinId)
 {
 
     button++;
     //sprintf(test, "uart read check\r\n", strlen("uart read check\r\n"));
-    if (button == 1)
+    if (programState == RECEIVE)
     {
-        programState = SEND;
-    } else if (button == 2)
-    {
-        programState = RECEIVE;
+        programState = IDLE;
     }
+
     else if (button == 3)
     {
         programState = MPU;
@@ -281,14 +323,21 @@ void buzzfxn(UArg arg0, UArg arg1)
 
     while (1)
     {
-        if (programState == SEND)
+        if (programState == RECEIVE)
         {
-            System_printf("beep \r\n");
-            System_flush();
+            //System_printf("beep \r\n");
+            //System_flush();
             buzzerOpen(hBuzzer);
             buzzerSetFrequency(5000);
             Task_sleep(50000 / Clock_tickPeriod);
             buzzerClose();
+            Task_sleep(50000/ Clock_tickPeriod);
+
+            buzzerOpen(hBuzzer);
+            buzzerSetFrequency(5000);
+            Task_sleep(100000/ Clock_tickPeriod);
+            buzzerClose();
+
         }
         Task_sleep(950000 / Clock_tickPeriod);
     }
@@ -299,12 +348,28 @@ void buzzfxn(UArg arg0, UArg arg1)
 // Handler function
 static void uartFxn(UART_Handle handle, void *rxBuf, size_t len) {
 
-   // We now have the desired amount of characters available
-   // in the rxBuf array, with a length of len, which we can process as needed.
-   // Here, we pass them as arguments to another function (for demonstration purposes).
+    lastCalled = Clock_getTicks();
 
-   // After processing, wait for the next interrupt...
-   UART_read(handle, rxBuf, 1);
+    char* rxData = (char*)rxBuf;
+    int i;
+    for (i =0; i < len; i++){
+        if(rxIndex < BUFF_SIZE - 1) {
+            buff[rxIndex++] = rxData[i];
+
+            if(rxData[i] == '\n') {
+                has_message = true;
+                //System_printf("Received:");
+                //System_flush();
+                break;
+            }
+        } else {
+            rxIndex = 0;
+            System_printf("Overflow");
+            System_flush();
+        }
+    }
+
+   UART_read(handle, rxBuf, 3);
 }
 void uartSend(UArg arg0, UArg arg1)
 {
@@ -312,6 +377,7 @@ void uartSend(UArg arg0, UArg arg1)
     // UART library settings
     UART_Handle uart;
     UART_Params uartParams;
+    Char readChar[3];
 
     // Initialize serial communication
     UART_Params_init(&uartParams);
@@ -335,18 +401,13 @@ void uartSend(UArg arg0, UArg arg1)
 
     // Start waiting for data
 
-    UART_read(uart, buff, 1);
-    //UART_write(uart, buff, 1);
+    UART_read(uart, readChar, 3);
 
     // Infinite loop
         while(1)
         {
-            if(programState == RECEIVE)
-            {
-            System_printf("uart loop \n\r");
-            System_flush();
-            }
-            Task_sleep(950000 / Clock_tickPeriod);
+
+        Task_sleep(1000000 / Clock_tickPeriod);
         }
      System_printf("uart done \n\r");
      System_flush();
