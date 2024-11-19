@@ -37,23 +37,29 @@
 // stacks for different tasks
 #define STACKSIZE 1024
 Char uartStack[STACKSIZE];
+
 Char buzzStack[2 * STACKSIZE];
 Char mpuStack[2 * STACKSIZE];
 
 enum state
 {
-    IDLE = 0, SEND, RECEIVE, MPU
+    IDLE = 0, SEND, RECEIVE, MPU, READ_MSG
 };
 enum state programState = IDLE;
 
 //test global variables
 #define BUFF_SIZE 200
-#define TIMEOUT 10000
+#define TIMEOUT 5000
 volatile uint32_t lastCalled = 0;
-static uint8_t button = 0;
 Char buff[BUFF_SIZE];
+Char message[BUFF_SIZE];
+static int count = 0;
+
 Bool has_message = false;
+Bool stateChange = false;
 static int rxIndex = 0;
+Bool enableButton = false;
+Bool ready = false;
 
 
 // RTOS global variables for handling the pins
@@ -91,12 +97,14 @@ static const I2CCC26XX_I2CPinCfg i2cMPUCfg = {
     .pinSCL = Board_I2C0_SCL1
 };
 
+
 void buttonFxn(PIN_Handle handle, PIN_Id pinId);
 void buzzfxn(UArg arg0, UArg arg1);
 static void uartFxn(UART_Handle handle, void *rxBuf, size_t len);
-void uartSend(UArg arg0, UArg arg1);
+void uartRead(UArg arg0, UArg arg1);
 void sensorFxn(UArg arg0, UArg arg1);
 Void clkFxn(UArg arg0);
+
 /*
  *  ======== main ========
  */
@@ -109,6 +117,8 @@ int main(void)
     /* Creating task parameters uart*/
     Task_Params uartParams;
     Task_Handle uartHandle;
+
+
 
     Task_Handle buzztask;
     Task_Params buzzParams;
@@ -125,10 +135,10 @@ int main(void)
 
 
       /* Create a periodic Clock Instance with period = 5 system time units */
-      clkParams.period = 5;
+      clkParams.period = 100000;
       clkParams.startFlag = TRUE;
 
-      clk = Clock_create(clkFxn, 5, &clkParams, NULL);
+      clk = Clock_create(clkFxn, 500000, &clkParams, NULL);
       Clock_start(clk);
       System_printf("Use Some Time...\n");  /* add */
       System_flush();  /* add */
@@ -156,9 +166,9 @@ int main(void)
     uartParams.stackSize = STACKSIZE;
     uartParams.stack = &uartStack;
     // Set task priority
-    uartParams.priority = 2;
+    uartParams.priority = 3;
     // Create task
-    uartHandle = Task_create(uartSend, &uartParams, NULL);
+    uartHandle = Task_create(uartRead, &uartParams, NULL);
     if (uartHandle == NULL)
     {
         System_abort("Task create failed");
@@ -198,8 +208,7 @@ int main(void)
     }
 
 
-    System_printf("Hello world\n");
-    System_flush();
+
 
     /* Start BIOS */
     BIOS_start();
@@ -210,43 +219,43 @@ int main(void)
 Void clkFxn(UArg arg0)
 {
 
-        if(has_message && Clock_getTicks() - lastCalled > TIMEOUT && programState == IDLE )
-                {
-                    programState = RECEIVE;
-                    rxIndex = 0;
-                    has_message = false;
-                    System_printf("%s", buff);
-                    System_flush();
-                    //System_printf("%d\n", Clock_getTicks() - lastCalled);
-                    //System_flush();
-                    memset(buff, '\0', BUFF_SIZE);
-                }
-}
 
+    if(has_message && Clock_getTicks() - lastCalled > TIMEOUT && programState == IDLE )
+            {
+                programState = RECEIVE;
+
+                System_printf("%s", buff);
+                System_flush();
+                Task_sleep(1000000 / Clock_tickPeriod);
+            }
+}
 
 
 void buttonFxn(PIN_Handle handle, PIN_Id pinId)
 {
+    if(enableButton){
+        if (programState == RECEIVE)
+            {
+                programState = READ_MSG;
+            } else if(programState == IDLE) {
+                stateChange = true;
+                //programState = MPU;
+                ready = true;
 
-    button++;
-    //sprintf(test, "uart read check\r\n", strlen("uart read check\r\n"));
-    if (programState == RECEIVE)
-    {
-        programState = IDLE;
+            } else if (programState == MPU) {
+                stateChange = true;
+                programState = IDLE;
+
+            }
     }
 
-    else if (button == 3)
-    {
-        programState = MPU;
-    }
-    else if (button >= 4)
-    {
-        button = 0;
-    }
-    System_printf("button test %d \r\n", button);
-    System_printf("program state: %d \r\n", programState);
-    System_flush();
+
+
+
+
 }
+
+
 
 Void sensorFxn(UArg arg0, UArg arg1) {
 
@@ -281,9 +290,10 @@ Void sensorFxn(UArg arg0, UArg arg1) {
     mpu9250_setup(&i2cMPU);
 
     System_printf("MPU9250: Setup and calibration OK\n");
-    System_printf("\nx, y, z \n");
+    enableButton = true;
+    //System_printf("\nx, y, z \n");
     System_flush();
-
+    int end_msg = 0;
 
     // Loop forever
     while (1)
@@ -293,29 +303,51 @@ Void sensorFxn(UArg arg0, UArg arg1) {
         // MPU ask data
         mpu9250_get_data(&i2cMPU, &ax, &ay, &az, &gx, &gy, &gz);
 
-        if(abs(ax) >=0.05 || abs(ay)>=0.05)
+        if (gx > 60 ) {
+            sprintf(message[count], " \r\n\0", 200);
+            count += 4;
+            end_msg ++;
+
+        } else if ((abs(ax) - abs(ay) > 0.1) && !(ax > 1 && ay > 1 )) {
+
+            sprintf(message[count], ".\r\n\0", 200);
+            count += 4;
+            end_msg = 0;
+
+
+       } else if ((abs(ay) - abs(ax) > 0.5) && !(ax > 1 && ay > 1 )) {
+
+           sprintf(message[count], "-\r\n\0", 200);
+           count += 4;
+           end_msg = 0;
+
+       }
+        if (end_msg == 2)
+        {
+            programState = SEND;
+        }
+
+     /*  if((abs(ax) >=0.05 || abs(ay)>=0.05 ) && 0)
+
             {
+
             char xstr[20], ystr[20], zstr[20];
-            sprintf(xstr, "%.2f", ax);
-            sprintf(ystr, "%.2f", ay);
-            sprintf(zstr, "%.2f", az);
+            sprintf(xstr, "%.2f", gx);
+            sprintf(ystr, "%.2f", gy);
+            sprintf(zstr, "%.2f", gz);
 
             System_printf("%s, %s, %s\n", xstr, ystr, zstr);
             System_flush();
 
-            }
-        // Sleep 100ms
+            }*/
+        // Sleep 200ms
         }
-        Task_sleep(100000 / Clock_tickPeriod);
+        Task_sleep(200000 / Clock_tickPeriod);
         }
-    // Program never gets here..
-    // MPU close i2c
-    // I2C_close(i2cMPU);
-    // MPU power off
-    // PIN_setOutputValue(hMpuPin,Board_MPU_POWER, Board_MPU_POWER_OFF);
+
 }
 
-void buzzfxn(UArg arg0, UArg arg1)
+void buzzfxn(UArg Overflowarg0, UArg arg1)
 {
 
     System_printf("buzz on \r\n");
@@ -323,26 +355,136 @@ void buzzfxn(UArg arg0, UArg arg1)
 
     while (1)
     {
+        if (stateChange){
+            if(programState == MPU) {
+                buzzerOpen(hBuzzer);
+                buzzerSetFrequency(1200);
+                Task_sleep(150000 / Clock_tickPeriod);
+                buzzerClose();
+                Task_sleep(50000 / Clock_tickPeriod);
+                buzzerOpen(hBuzzer);
+                buzzerSetFrequency(1400);
+                Task_sleep(150000 / Clock_tickPeriod);
+                buzzerClose();
+                System_printf("MPU\n");
+                System_flush();
+
+            } else if (programState == IDLE) {
+                buzzerOpen(hBuzzer);
+                buzzerSetFrequency(800);
+                Task_sleep(100000 / Clock_tickPeriod);
+                buzzerClose();
+                Task_sleep(50000 / Clock_tickPeriod);
+                buzzerOpen(hBuzzer);
+                buzzerSetFrequency(900);
+                Task_sleep(100000 / Clock_tickPeriod);
+                buzzerClose();
+                Task_sleep(50000 / Clock_tickPeriod);
+                buzzerOpen(hBuzzer);
+                buzzerSetFrequency(1000);
+                Task_sleep(200000 / Clock_tickPeriod);
+                buzzerClose();
+                System_printf("IDLE\n");
+                System_flush();
+            }
+            stateChange = false;
+        }
         if (programState == RECEIVE)
         {
-            //System_printf("beep \r\n");
-            //System_flush();
             buzzerOpen(hBuzzer);
-            buzzerSetFrequency(5000);
+            buzzerSetFrequency(440);  // A4
+            Task_sleep(150000 / Clock_tickPeriod);  // Short beep
+            buzzerClose();
+            Task_sleep(50000 / Clock_tickPeriod);   // Short pause
+
+            buzzerOpen(hBuzzer);
+            buzzerSetFrequency(494);  // B4
+            Task_sleep(150000 / Clock_tickPeriod);  // Short beep
+            buzzerClose();
             Task_sleep(50000 / Clock_tickPeriod);
-            buzzerClose();
-            Task_sleep(50000/ Clock_tickPeriod);
 
             buzzerOpen(hBuzzer);
-            buzzerSetFrequency(5000);
-            Task_sleep(100000/ Clock_tickPeriod);
+            buzzerSetFrequency(523);  // C5
+            Task_sleep(200000 / Clock_tickPeriod);  // Slightly longer beep
             buzzerClose();
+            Task_sleep(100000 / Clock_tickPeriod);
 
+            // Melody Part 2: Descending pattern
+            buzzerOpen(hBuzzer);
+            buzzerSetFrequency(494);  // B4
+            Task_sleep(150000 / Clock_tickPeriod);
+            buzzerClose();
+            Task_sleep(50000 / Clock_tickPeriod);
+
+            buzzerOpen(hBuzzer);
+            buzzerSetFrequency(440);  // A4
+            Task_sleep(150000 / Clock_tickPeriod);
+            buzzerClose();
+            Task_sleep(50000 / Clock_tickPeriod);
+
+            buzzerOpen(hBuzzer);
+            buzzerSetFrequency(392);  // G4
+            Task_sleep(300000 / Clock_tickPeriod);  // Long beep
+            buzzerClose();
+            Task_sleep(200000 / Clock_tickPeriod);
+
+            // Melody Part 3: Alternating quick beeps
+            int i;
+            for (i = 0; i < 3; i++)
+            {
+                buzzerOpen(hBuzzer);
+                buzzerSetFrequency(523);  // C5
+                Task_sleep(100000 / Clock_tickPeriod);
+                buzzerClose();
+                Task_sleep(100000 / Clock_tickPeriod);
+
+                System_printf("space \n");
+      buzzerOpen(hBuzzer);
+                buzzerSetFrequency(392);  // G4
+                Task_sleep(100000 / Clock_tickPeriod);
+                buzzerClose();
+                Task_sleep(100000 / Clock_tickPeriod);
+            }
+
+            // Melody Part 4: Sustained tone with fade-out effect
+            buzzerOpen(hBuzzer);
+            buzzerSetFrequency(440);  // A4
+            Task_sleep(500000 / Clock_tickPeriod);  // Long, sustained beep
+            buzzerClose();
+            Task_sleep(200000 / Clock_tickPeriod);
+
+        } else if(programState == READ_MSG) {
+            Task_sleep(500000 / Clock_tickPeriod);
+            int i = 0;
+
+            while (buff[i] != '\0') {
+                if (buff[i] == '.') {
+                    buzzerOpen(hBuzzer);
+                    buzzerSetFrequency(1000);
+                    Task_sleep(100000 / Clock_tickPeriod);
+                    buzzerClose();
+                    Task_sleep(500000 / Clock_tickPeriod);
+                } else if (buff[i] == '-') {
+                    buzzerOpen(hBuzzer);
+                    buzzerSetFrequency(1000);
+                    Task_sleep(500000 / Clock_tickPeriod);
+                    buzzerClose();
+                    Task_sleep(500000 / Clock_tickPeriod);
+                } else if (buff[i] == ' ') {
+                    Task_sleep(1000000 / Clock_tickPeriod);
+                }
+                i++;
+            }
+            rxIndex = 0;
+            has_message = false;
+            memset(buff, '\0', BUFF_SIZE);
+            programState = IDLE;
+            System_printf("Played messgae\n");
+            System_flush();
         }
         Task_sleep(950000 / Clock_tickPeriod);
     }
-    System_printf("buzz skipped \r\n");
-    System_flush();
+
 }
 
 // Handler function
@@ -371,7 +513,7 @@ static void uartFxn(UART_Handle handle, void *rxBuf, size_t len) {
 
    UART_read(handle, rxBuf, 3);
 }
-void uartSend(UArg arg0, UArg arg1)
+void uartRead(UArg arg0, UArg arg1)
 {
 
     // UART library settings
@@ -394,7 +536,7 @@ void uartSend(UArg arg0, UArg arg1)
     uart = UART_open(Board_UART0, &uartParams);
     if (uart == NULL)
     {
-        System_abort("Error opening the UART");
+        System_abort("Error opening the UARTread");
     }
 
     UART_write(uart, "uart check\r\n", strlen("uart check\r\n"));
@@ -403,15 +545,23 @@ void uartSend(UArg arg0, UArg arg1)
 
     UART_read(uart, readChar, 3);
 
+    //Char echo_msg[4] = ".\r\n\0";
+    //Char echo_space[4] =  " \r\n\0";
+    int i;
     // Infinite loop
         while(1)
         {
+            if(ready)
+            {
+            // Send the string back
+            //UART_write(uart, echo_msg, strlen(echo_msg));
+            for(i = 0; i < 2;i++)
+            {
+                UART_write(uart, message, strlen(message));
+            }
+            }
+            Task_sleep(1000000 / Clock_tickPeriod);
 
-        Task_sleep(1000000 / Clock_tickPeriod);
         }
-     System_printf("uart done \n\r");
-     System_flush();
 }
 
-// TODO different buffers for sending and receiving
-// strcmp from String lib
