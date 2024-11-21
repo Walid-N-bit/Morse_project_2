@@ -53,14 +53,14 @@ enum state programState = IDLE;
 volatile uint32_t lastCalled = 0;
 Char buff[BUFF_SIZE];
 Char message[BUFF_SIZE];
-static int count = 0;
 
 Bool has_message = false;
 Bool stateChange = false;
 static int rxIndex = 0;
+static int wxIndex = 0;
 Bool enableButton = false;
 Bool ready = false;
-
+Bool beep = false;
 
 // RTOS global variables for handling the pins
 static PIN_Handle buttonHandle;
@@ -83,20 +83,17 @@ PIN_Config cBuzzer[] = {
 
 // MPU power pin global variables
 static PIN_Handle hMpuPin;
-static PIN_State  MpuPinState;
+static PIN_State MpuPinState;
 
 // MPU power pin
 static PIN_Config MpuPinConfig[] = {
-    Board_MPU_POWER  | PIN_GPIO_OUTPUT_EN | PIN_GPIO_HIGH | PIN_PUSHPULL | PIN_DRVSTR_MAX,
-    PIN_TERMINATE
-};
+Board_MPU_POWER | PIN_GPIO_OUTPUT_EN | PIN_GPIO_HIGH | PIN_PUSHPULL
+                                             | PIN_DRVSTR_MAX,
+                                     PIN_TERMINATE };
 
 // MPU uses its own I2C interface
-static const I2CCC26XX_I2CPinCfg i2cMPUCfg = {
-    .pinSDA = Board_I2C0_SDA1,
-    .pinSCL = Board_I2C0_SCL1
-};
-
+static const I2CCC26XX_I2CPinCfg i2cMPUCfg = { .pinSDA = Board_I2C0_SDA1,
+                                               .pinSCL = Board_I2C0_SCL1 };
 
 void buttonFxn(PIN_Handle handle, PIN_Id pinId);
 void buzzfxn(UArg arg0, UArg arg1);
@@ -118,8 +115,6 @@ int main(void)
     Task_Params uartParams;
     Task_Handle uartHandle;
 
-
-
     Task_Handle buzztask;
     Task_Params buzzParams;
 
@@ -130,20 +125,18 @@ int main(void)
     Board_initGeneral();
 
     /* setup Clock params */
-      Clock_Params_init(&clkParams);
+    Clock_Params_init(&clkParams);
 
+    /* Create a periodic Clock Instance with period = 5 system time units */
+    clkParams.period = 100000;
+    clkParams.startFlag = TRUE;
 
+    clk = Clock_create(clkFxn, 500000, &clkParams, NULL);
+    Clock_start(clk);
+    System_printf("Use Some Time...\n"); /* add */
+    System_flush(); /* add */
 
-      /* Create a periodic Clock Instance with period = 5 system time units */
-      clkParams.period = 100000;
-      clkParams.startFlag = TRUE;
-
-      clk = Clock_create(clkFxn, 500000, &clkParams, NULL);
-      Clock_start(clk);
-      System_printf("Use Some Time...\n");  /* add */
-      System_flush();  /* add */
-
-      lastCalled = Clock_getTicks();  /* add */
+    lastCalled = Clock_getTicks(); /* add */
 
     // Enable the pins for use in the program
     buttonHandle = PIN_open(&buttonState, buttonConfig);
@@ -152,7 +145,7 @@ int main(void)
         System_abort("Error initializing button pins\n");
     }
 
-    // Set the button pin�s interrupt handler to function buttonFxn
+    // Set the button pinï¿½s interrupt handler to function buttonFxn
     if (PIN_registerIntCb(buttonHandle, &buttonFxn) != 0)
     {
         System_abort("Error registering button callback function");
@@ -194,21 +187,22 @@ int main(void)
     Board_initI2C();
     // Open MPU power pin
     hMpuPin = PIN_open(&MpuPinState, MpuPinConfig);
-    if (hMpuPin == NULL) {
+    if (hMpuPin == NULL)
+    {
         System_abort("Pin open failed!");
     }
 
     Task_Params_init(&mpuParams);
     mpuParams.stackSize = 2 * STACKSIZE;
     mpuParams.stack = &mpuStack;
-    mputask = Task_create((Task_FuncPtr)sensorFxn, &mpuParams, NULL);
+    enableButton = true;
+
+    mputask = Task_create((Task_FuncPtr) sensorFxn, &mpuParams, NULL);
     mpuParams.priority = 2;
-    if (mputask == NULL) {
+    if (mputask == NULL)
+    {
         System_abort("Task create failed!");
     }
-
-
-
 
     /* Start BIOS */
     BIOS_start();
@@ -219,45 +213,43 @@ int main(void)
 Void clkFxn(UArg arg0)
 {
 
+    if (has_message && Clock_getTicks() - lastCalled > TIMEOUT
+            && programState == IDLE)
+    {
+        programState = RECEIVE;
 
-    if(has_message && Clock_getTicks() - lastCalled > TIMEOUT && programState == IDLE )
-            {
-                programState = RECEIVE;
-
-                System_printf("%s", buff);
-                System_flush();
-                Task_sleep(1000000 / Clock_tickPeriod);
-            }
+        System_printf("%s", buff);
+        System_flush();
+        Task_sleep(1000000 / Clock_tickPeriod);
+    }
 }
-
 
 void buttonFxn(PIN_Handle handle, PIN_Id pinId)
 {
-    if(enableButton){
+    if (enableButton)
+    {
         if (programState == RECEIVE)
-            {
-                programState = READ_MSG;
-            } else if(programState == IDLE) {
-                stateChange = true;
-                //programState = MPU;
-                ready = true;
+        {
+            programState = READ_MSG;
+        }
+        else if (programState == IDLE)
+        {
+            stateChange = true;
+            programState = MPU;
 
-            } else if (programState == MPU) {
-                stateChange = true;
-                programState = IDLE;
+        }
+        else if (programState == MPU)
+        {
+            stateChange = true;
+            programState = IDLE;
 
-            }
+        }
     }
-
-
-
-
 
 }
 
-
-
-Void sensorFxn(UArg arg0, UArg arg1) {
+Void sensorFxn(UArg arg0, UArg arg1)
+{
 
     float ax, ay, az, gx, gy, gz;
 
@@ -267,10 +259,10 @@ Void sensorFxn(UArg arg0, UArg arg1) {
     I2C_Params_init(&i2cMPUParams);
     i2cMPUParams.bitRate = I2C_400kHz;
     // Note the different configuration below
-    i2cMPUParams.custom = (uintptr_t)&i2cMPUCfg;
+    i2cMPUParams.custom = (uintptr_t) &i2cMPUCfg;
 
     // MPU power on
-    PIN_setOutputValue(hMpuPin,Board_MPU_POWER, Board_MPU_POWER_ON);
+    PIN_setOutputValue(hMpuPin, Board_MPU_POWER, Board_MPU_POWER_ON);
 
     // Wait 100ms for the MPU sensor to power up
     Task_sleep(100000 / Clock_tickPeriod);
@@ -279,7 +271,8 @@ Void sensorFxn(UArg arg0, UArg arg1) {
 
     // MPU open i2c
     i2cMPU = I2C_open(Board_I2C, &i2cMPUParams);
-    if (i2cMPU == NULL) {
+    if (i2cMPU == NULL)
+    {
         System_abort("Error Initializing I2CMPU\n");
     }
 
@@ -290,60 +283,120 @@ Void sensorFxn(UArg arg0, UArg arg1) {
     mpu9250_setup(&i2cMPU);
 
     System_printf("MPU9250: Setup and calibration OK\n");
-    enableButton = true;
     //System_printf("\nx, y, z \n");
     System_flush();
+    enableButton = true;
+    ready = true;
     int end_msg = 0;
-
+    int i;
     // Loop forever
     while (1)
+    {
+        if (programState == MPU)
         {
-        if(programState == MPU)
-        {
-        // MPU ask data
-        mpu9250_get_data(&i2cMPU, &ax, &ay, &az, &gx, &gy, &gz);
+            // MPU ask data
+            mpu9250_get_data(&i2cMPU, &ax, &ay, &az, &gx, &gy, &gz);
 
-        if (gx > 60 ) {
-            sprintf(message[count], " \r\n\0", 200);
-            count += 4;
-            end_msg ++;
-
-        } else if ((abs(ax) - abs(ay) > 0.1) && !(ax > 1 && ay > 1 )) {
-
-            sprintf(message[count], ".\r\n\0", 200);
-            count += 4;
-            end_msg = 0;
-
-
-       } else if ((abs(ay) - abs(ax) > 0.5) && !(ax > 1 && ay > 1 )) {
-
-           sprintf(message[count], "-\r\n\0", 200);
-           count += 4;
-           end_msg = 0;
-
-       }
-        if (end_msg == 2)
-        {
-            programState = SEND;
-        }
-
-     /*  if((abs(ax) >=0.05 || abs(ay)>=0.05 ) && 0)
-
+            if (gx > 60)
             {
+                beep = true;
+                System_printf("space\n");
+                System_flush();
+                char *wxData = " \r\n\0";
 
-            char xstr[20], ystr[20], zstr[20];
-            sprintf(xstr, "%.2f", gx);
-            sprintf(ystr, "%.2f", gy);
-            sprintf(zstr, "%.2f", gz);
+                for (i = 0; i < 4; i++)
+                {
+                    if (wxIndex < BUFF_SIZE - 5)
+                    {
+                        message[wxIndex++] = wxData[i];
+                    }
+                    else
+                    {
+                        wxIndex = 0;
+                        System_printf("Overflow");
+                        System_flush();
+                    }
+                }
+                end_msg++;
+                if (end_msg == 2)
+                {
+                    beep = false;
+                    System_printf("Message done\n");
+                    System_flush();
+                    programState = SEND;
+                    Task_sleep(1000000 / Clock_tickPeriod);
+                }
 
-            System_printf("%s, %s, %s\n", xstr, ystr, zstr);
-            System_flush();
+            }
+            else if ((abs(ax) - abs(ay) > 0.05) && !(ax > 1 && ay > 1))
+            {
+                beep = true;
 
-            }*/
-        // Sleep 200ms
+                System_printf("dot\n");
+                System_flush();
+
+                char *wxData = ".\r\n\0";
+
+                for (i = 0; i < 4; i++)
+                {
+                    if (wxIndex < BUFF_SIZE - 5)
+                    {
+                        message[wxIndex++] = wxData[i];
+                    }
+                    else
+                    {
+                        wxIndex = 0;
+
+                        System_printf("Overflow");
+                        System_flush();
+                    }
+                }
+                end_msg = 0;
+
+            }
+            else if ((abs(ay) - abs(ax) > 0.05) && !(ax > 1 && ay > 1))
+            {
+                beep = true;
+
+                System_printf("dash\n");
+                System_flush();
+
+                char *wxData = "-\r\n\0";
+
+                for (i = 0; i < 4; i++)
+                {
+                    if (wxIndex < BUFF_SIZE - 5)
+                    {
+                        message[wxIndex++] = wxData[i];
+                    }
+                    else
+                    {
+                        wxIndex = 0;
+                        System_printf("Overflow");
+                        System_flush();
+                    }
+                }
+                end_msg = 0;
+
+            }
+            // sensor data collection
+            /*  if((abs(ax) >=0.05 || abs(ay)>=0.05 ) && 0)
+
+             {
+
+             char xstr[20], ystr[20], zstr[20];
+             sprintf(xstr, "%.2f", gx);
+             sprintf(ystr, "%.2f", gy);
+             sprintf(zstr, "%.2f", gz);
+
+             System_printf("%s, %s, %s\n", xstr, ystr, zstr);
+             System_flush();
+
+             }*/
+            // Sleep 200ms
         }
         Task_sleep(200000 / Clock_tickPeriod);
-        }
+    }
 
 }
 
@@ -355,8 +408,28 @@ void buzzfxn(UArg Overflowarg0, UArg arg1)
 
     while (1)
     {
-        if (stateChange){
-            if(programState == MPU) {
+        if (ready)
+        {
+            buzzerOpen(hBuzzer);
+            buzzerSetFrequency(800);
+            Task_sleep(100000 / Clock_tickPeriod);
+            buzzerClose();
+            Task_sleep(50000 / Clock_tickPeriod);
+            buzzerOpen(hBuzzer);
+            buzzerSetFrequency(900);
+            Task_sleep(100000 / Clock_tickPeriod);
+            buzzerClose();
+            Task_sleep(50000 / Clock_tickPeriod);
+            buzzerOpen(hBuzzer);
+            buzzerSetFrequency(1000);
+            Task_sleep(200000 / Clock_tickPeriod);
+            buzzerClose();
+            ready = false;
+        }
+        if (stateChange)
+        {
+            if (programState == MPU)
+            {
                 buzzerOpen(hBuzzer);
                 buzzerSetFrequency(1200);
                 Task_sleep(150000 / Clock_tickPeriod);
@@ -369,7 +442,9 @@ void buzzfxn(UArg Overflowarg0, UArg arg1)
                 System_printf("MPU\n");
                 System_flush();
 
-            } else if (programState == IDLE) {
+            }
+            else if (programState == IDLE)
+            {
                 buzzerOpen(hBuzzer);
                 buzzerSetFrequency(800);
                 Task_sleep(100000 / Clock_tickPeriod);
@@ -438,8 +513,7 @@ void buzzfxn(UArg Overflowarg0, UArg arg1)
                 buzzerClose();
                 Task_sleep(100000 / Clock_tickPeriod);
 
-                System_printf("space \n");
-      buzzerOpen(hBuzzer);
+                buzzerOpen(hBuzzer);
                 buzzerSetFrequency(392);  // G4
                 Task_sleep(100000 / Clock_tickPeriod);
                 buzzerClose();
@@ -453,24 +527,32 @@ void buzzfxn(UArg Overflowarg0, UArg arg1)
             buzzerClose();
             Task_sleep(200000 / Clock_tickPeriod);
 
-        } else if(programState == READ_MSG) {
+        }
+        else if (programState == READ_MSG)
+        {
             Task_sleep(500000 / Clock_tickPeriod);
             int i = 0;
 
-            while (buff[i] != '\0') {
-                if (buff[i] == '.') {
+            while (buff[i] != '\0')
+            {
+                if (buff[i] == '.')
+                {
                     buzzerOpen(hBuzzer);
                     buzzerSetFrequency(1000);
                     Task_sleep(100000 / Clock_tickPeriod);
                     buzzerClose();
                     Task_sleep(500000 / Clock_tickPeriod);
-                } else if (buff[i] == '-') {
+                }
+                else if (buff[i] == '-')
+                {
                     buzzerOpen(hBuzzer);
                     buzzerSetFrequency(1000);
                     Task_sleep(500000 / Clock_tickPeriod);
                     buzzerClose();
                     Task_sleep(500000 / Clock_tickPeriod);
-                } else if (buff[i] == ' ') {
+                }
+                else if (buff[i] == ' ')
+                {
                     Task_sleep(1000000 / Clock_tickPeriod);
                 }
                 i++;
@@ -482,36 +564,55 @@ void buzzfxn(UArg Overflowarg0, UArg arg1)
             System_printf("Played messgae\n");
             System_flush();
         }
+        else if (programState == MPU)
+        {
+            if (beep)
+            {
+                //System_printf("BEEP\n");
+                //System_flush();
+                buzzerOpen(hBuzzer);
+                buzzerSetFrequency(1200);
+                Task_sleep(100000 / Clock_tickPeriod);
+                buzzerClose();
+                beep = false;
+            }
+        }
         Task_sleep(950000 / Clock_tickPeriod);
     }
 
 }
 
 // Handler function
-static void uartFxn(UART_Handle handle, void *rxBuf, size_t len) {
+static void uartFxn(UART_Handle handle, void *rxBuf, size_t len)
+{
 
     lastCalled = Clock_getTicks();
 
-    char* rxData = (char*)rxBuf;
+    char *rxData = (char*) rxBuf;
     int i;
-    for (i =0; i < len; i++){
-        if(rxIndex < BUFF_SIZE - 1) {
+    for (i = 0; i < len; i++)
+    {
+        if (rxIndex < BUFF_SIZE - 1)
+        {
             buff[rxIndex++] = rxData[i];
 
-            if(rxData[i] == '\n') {
+            if (rxData[i] == '\n')
+            {
                 has_message = true;
                 //System_printf("Received:");
                 //System_flush();
                 break;
             }
-        } else {
+        }
+        else
+        {
             rxIndex = 0;
             System_printf("Overflow");
             System_flush();
         }
     }
 
-   UART_read(handle, rxBuf, 3);
+    UART_read(handle, rxBuf, 3);
 }
 void uartRead(UArg arg0, UArg arg1)
 {
@@ -545,23 +646,36 @@ void uartRead(UArg arg0, UArg arg1)
 
     UART_read(uart, readChar, 3);
 
-    //Char echo_msg[4] = ".\r\n\0";
-    //Char echo_space[4] =  " \r\n\0";
-    int i;
     // Infinite loop
-        while(1)
+    while (1)
+    {
+        if (programState == SEND)
         {
-            if(ready)
+
+            int i;
+            int j = 0;
+            char symbol[4];
+            size_t messageLength = strlen(message);
+            for (i = 0; i < wxIndex; i++)
             {
-            // Send the string back
-            //UART_write(uart, echo_msg, strlen(echo_msg));
-            for(i = 0; i < 2;i++)
-            {
-                UART_write(uart, message, strlen(message));
+
+                symbol[j++] = message[i];
+                if (message[i] == '\0')
+                {
+
+                    UART_write(uart, symbol, strlen(symbol));
+                    j = 0;
+                }
             }
-            }
-            Task_sleep(1000000 / Clock_tickPeriod);
+
+            wxIndex = 0;
+            has_message = false;
+            memset(message, '\0', BUFF_SIZE);
+            stateChange = true;
+            programState = IDLE;
 
         }
-}
+        Task_sleep(1000000 / Clock_tickPeriod);
 
+    }
+}
